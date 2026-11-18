@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 实时动作检测与深蹲计数器 / AI Pose Detection & Squat Counter</title>
+    <!-- 引入 Tailwind CSS 进行现代化样式美化 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 MediaPipe 相关工具库 -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* 镜像翻转视频和画布，保持镜面习惯 */
+        .mirrored {
+            transform: scaleX(-1);
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center justify-between p-4 md:p-6">
+
+    <!-- 顶部标题栏 -->
+    <header class="w-full max-w-5xl text-center py-4">
+        <h1 class="text-2xl md:text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-indigo-500">
+            AI 智能深蹲计数与动作检测
+        </h1>
+        <p class="text-slate-400 text-sm md:text-base mt-1">
+            Real-time Pose Detection & Intelligent Squat Counter
+        </p>
+    </header>
+
+    <!-- 主体内容区域：左侧视频/画布，右侧控制面板与数据看板 -->
+    <main class="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6 my-auto">
+        
+        <!-- 摄像头与画布容器 (占用2列) -->
+        <div class="lg:col-span-2 relative bg-slate-800 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex items-center justify-center aspect-[4/3]">
+            <video id="webcam" class="absolute w-full h-full object-cover mirrored hidden" autoplay playsinline></video>
+            <canvas id="output_canvas" class="absolute w-full h-full object-cover mirrored"></canvas>
+            
+            <!-- 载入遮罩提示 -->
+            <div id="loadingOverlay" class="absolute inset-name inset-0 bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 z-10">
+                <div class="animate-spin rounded-full h-12 w-12 border-4 border-teal-500 border-t-transparent mb-4"></div>
+                <h3 class="text-lg font-semibold text-slate-200">正在初始化摄像头与 AI 模型...</h3>
+                <p class="text-xs text-slate-400 mt-1">请在弹出的浏览器提示中点击“允许” (Allow Camera Access)</p>
+            </div>
+        </div>
+
+        <!-- 状态数据看板 (占用1列) -->
+        <div class="flex flex-col gap-4">
+            
+            <!-- 计数卡片 -->
+            <div class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-5 text-center shadow-lg relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-teal-500/10 rounded-full blur-2xl"></div>
+                <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">深蹲完成次数 (Squats Count)</h3>
+                <div id="counter" class="text-6xl font-extrabold text-teal-400 my-3">0</div>
+                <div id="stage" class="text-xs font-semibold px-3 py-1 rounded-full bg-slate-700 text-slate-300 inline-block">
+                    准备就绪 (Ready)
+                </div>
+            </div>
+
+            <!-- 实时角度监控卡片 -->
+            <div class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+                <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider mb-3">关节角度监控 (Joint Angles)</h3>
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span class="text-slate-300">膝盖夹角 (Knee Angle)</span>
+                            <span id="kneeAngleVal" class="font-bold text-teal-400">--°</span>
+                        </div>
+                        <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                            <div id="kneeBar" class="bg-teal-400 h-full transition-all duration-150" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span class="text-slate-300">髋关节夹角 (Hip Angle)</span>
+                            <span id="hipAngleVal" class="font-bold text-indigo-400">--°</span>
+                        </div>
+                        <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                            <div id="hipBar" class="bg-indigo-400 h-full transition-all duration-150" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 动作反馈提示 -->
+            <div id="feedbackBox" class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-4 text-center shadow-lg transition-all duration-300 flex items-center justify-center min-h-[70px]">
+                <p id="feedbackText" class="text-sm font-medium text-slate-300">
+                    请站到摄像头前，完整露出全身以开始锻炼。
+                </p>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- 底部操作栏/说明 -->
+    <footer class="w-full max-w-5xl text-center py-4 text-xs text-slate-500 border-t border-slate-800 mt-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>Powered by MediaPipe Pose & Tailwind CSS</span>
+        <span>提示：深蹲时请确保膝盖不超过脚尖过多，下蹲深度需使膝盖夹角小于 110 度。</span>
+    </footer>
+
+    <script>
+        // DOM 元素引用
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const counterElement = document.getElementById('counter');
+        const stageElement = document.getElementById('stage');
+        const kneeAngleVal = document.getElementById('kneeAngleVal');
+        const hipAngleVal = document.getElementById('hipAngleVal');
+        const kneeBar = document.getElementById('kneeBar');
+        const hipBar = document.getElementById('hipBar');
+        const feedbackBox = document.getElementById('feedbackBox');
+        const feedbackText = document.getElementById('feedbackText');
+
+        // 计数与状态机变量
+        let squatCount = 0;
+        let currentStage = "up"; // "up" (站立) 或 "down" (下蹲)
+        let isModelReady = false;
+
+        // 计算三点构成的夹角 (顶点在 b 点)
+        function calculateAngle(a, b, c) {
+            const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+            let angle = Math.abs(radians * 180.0 / Math.PI);
+            if (angle > 180.0) {
+                angle = 360.0 - angle;
+            }
+            return Math.round(angle);
+        }
+
+        // 处理 MediaPipe 骨骼检测结果
+        function onResults(results) {
+            // 隐藏加载动画
+            if (!isModelReady) {
+                isModelReady = true;
+                loadingOverlay.classList.add('hidden');
+            }
+
+            // 同步画布尺寸与视频一致
+            if (canvasElement.width !== videoElement.videoWidth || canvasElement.height !== videoElement.videoHeight) {
+                canvasElement.width = videoElement.videoWidth || 640;
+                canvasElement.height = videoElement.videoHeight || 480;
+            }
+
+            // 清空并绘制摄像头画面
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.poseLandmarks) {
+                const landmarks = results.poseLandmarks;
+
+                // 绘制骨骼连线与关键点
+                drawConnectors(canvasCtx, landmarks, POSE_CONNECTIONS, {color: 'rgba(20, 184, 166, 0.7)', lineWidth: 3});
+                drawLandmarks(canvasCtx, landmarks, {color: 'rgba(244, 63, 94, 0.8)', lineWidth: 1, radius: 4});
+
+                // 获取身体关键点 (以右侧身体为例：右髋、右膝、右踝、右肩)
+                // MediaPipe 关键点编号：
+                // 12: 右肩 (Right Shoulder), 24: 右髋 (Right Hip), 26: 右膝 (Right Knee), 28: 右踝 (Right Ankle)
+                // 如果右侧被遮挡，也可以取左侧 (11, 23, 25, 27)，这里优先取右侧
+                const shoulder = landmarks[12];
+                const hip = landmarks[24];
+                const knee = landmarks[26];
+                const ankle = landmarks[28];
+
+                if (shoulder && hip && knee && ankle && 
+                    shoulder.visibility > 0.5 && hip.visibility > 0.5 && knee.visibility > 0.5 && ankle.visibility > 0.5) {
+                    
+                    // 计算膝盖夹角 (髋-膝-踝)
+                    const kneeAngle = calculateAngle(hip, knee, ankle);
+                    // 计算髋关节夹角 (肩-髋-膝)
+                    const hipAngle = calculateAngle(shoulder, hip, knee);
+
+                    // 更新界面显示
+                    kneeAngleVal.innerText = `${kneeAngle}°`;
+                    hipAngleVal.innerText = `${hipAngle}°`;
+                    
+                    // 更新进度条 (假设角度范围在 70° 到 180° 之间)
+                    const kneePercent = Math.min(Math.max((180 - kneeAngle) / 110 * 100, 0), 100);
+                    const hipPercent = Math.min(Math.max((180 - hipAngle) / 90 * 100, 0), 100);
+                    kneeBar.style.width = `${kneePercent}%`;
+                    hipBar.style.width = `${hipPercent}%`;
+
+                    // 深蹲状态机逻辑
+                    // 1. 下蹲深度判断：当膝盖夹角小于 110 度时视为蹲下
+                    if (kneeAngle < 110) {
+                        currentStage = "down";
+                        stageElement.innerText = "下蹲中 (Squatting)";
+                        stageElement.className = "text-xs font-semibold px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 inline-block";
+                        feedbackText.innerText = "做得好！保持住，准备起身。";
+                        feedbackBox.className = "bg-slate-800/80 backdrop-blur border border-amber-500/40 rounded-2xl p-4 text-center shadow-lg transition-all duration-300 flex items-center justify-center min-h-[70px]";
+                    } 
+                    // 2. 站起判断：当膝盖夹角大于 160 度且之前处于下蹲状态时，完成一次有效深蹲
+                    else if (kneeAngle > 160 && currentStage === "down") {
+                        currentStage = "up";
+                        squatCount++;
+                        counterElement.innerText = squatCount;
+                        stageElement.innerText = "站立 (Standing)";
+                        stageElement.className = "text-xs font-semibold px-3 py-1 rounded-full bg-teal-500/20 text-teal-300 inline-block";
+                        feedbackText.innerText = "太棒了！+1 次深蹲完成。";
+                        feedbackBox.className = "bg-slate-800/80 backdrop-blur border border-teal-500/40 rounded-2xl p-4 text-center shadow-lg transition-all duration-300 flex items-center justify-center min-h-[70px]";
+                    } else if (currentStage === "up" && kneeAngle >= 110 && kneeAngle <= 160) {
+                        feedbackText.innerText = "请再往下蹲深一点（膝盖弯曲）";
+                        feedbackBox.className = "bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-4 text-center shadow-lg transition-all duration-300 flex items-center justify-center min-h-[70px]";
+                    }
+
+                } else {
+                    feedbackText.innerText = "未完整检测到身体，请调整站位以露出侧身或正面。";
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // 初始化 MediaPipe Pose 模型
+        const pose = new Pose({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+            }
+        });
+
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            smoothSegmentation: false,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+
+        pose.onResults(onResults);
+
+        // 启动摄像头采集
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start().catch(err => {
+            loadingOverlay.innerHTML = `
+                <div class="text-red-400 font-semibold mb-2">摄像头启动失败 / Camera Error</div>
+                <p class="text-xs text-slate-400">请检查浏览器权限或确保设备拥有可用摄像头。</p>
+            `;
+            console.error(err);
+        });
+    </script>
+</body>
+</html>
